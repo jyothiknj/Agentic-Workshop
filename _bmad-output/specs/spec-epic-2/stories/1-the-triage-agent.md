@@ -58,6 +58,30 @@ context: ['{project-root}/_bmad-output/specs/spec-epic-2/SPEC.md', '{project-roo
 - [x] `agent.py` -- add `make_model()` (provider/env selection and missing-key error), `build_agent(model, tools)` (`create_agent` with the policy system prompt and `ToolStrategy` with a one-retry handler), `load_tools()` (MCP stdio client), and `async def triage(ticket_id) -> dict` wiring them -- seams let tests swap the model and tools.
 - [x] `tests/test_agent.py` -- one test per offline matrix row (Groq switch, Gemini default, one bad output, two bad outputs, missing key) with a scripted fake model and fake tools; a test that the system prompt contains `TRIAGE_POLICY.md` and the data-not-instructions rule; a test that `load_tools()` lists exactly `get_ticket` and `get_customer_history` from the real server -- live rows are covered by Verification.
 
+### Review Findings
+
+Code review of `main...story/Jyothi-2.1` (2026-09-26).
+
+- [x] [Review][Patch] The prompt includes the policy's "escalate_to_human tool" line, but story 2.1 has no such tool and never tells the model so [agent.py:AGENT_INSTRUCTIONS]
+- [x] [Review][Patch] No test sends a successful real-server result through the lookup check (the real adapter returns content blocks, the fakes return a string) [tests/test_agent.py:test_unknown_ticket_real_server]
+- [x] [Review][Patch] `triage()` success path untested: nothing checks it returns a JSON-serialisable dict through make_model → load_tools → build_agent → _run [agent.py:triage]
+- [x] [Review][Patch] `epic-2-context.md` says to convert `open_tickets` to a number, contradicting the story's "no code-side conversion" decision [_bmad-output/implementation-artifacts/epic-2-context.md:51]
+- [x] [Review][Defer] Live verification is incomplete: Groq never passed (401 on the configured key), the Gemini T-1042 / T-1099 runs predate the review fixes, and the MLflow span nesting (tool calls under `triage`) was never inspected — deferred: needs a valid Groq key and the user's go-ahead for live model calls.
+
+Rejected:
+- Check the Enterprise rule in code — the story's frozen decision leaves it to the model; the fix would edit this spec.
+- Missing-customer-lookup raises a bare `RuntimeError`; `TicketNotFoundError` used when the ticket exists but wasn't looked up — low: callers treat any failure as no decision; a new error class adds public surface.
+- Implementation Notes list three errors but the code also raises `RuntimeError` and `ValueError` — the fix edits this spec's notes.
+- Missing `app.db` reported as `TicketNotFoundError`; the real-server unknown-ticket test can't tell the two apart — low: the message carries the server's error and no decision is returned; fix adds branching.
+- "Retry budget is per run" test only proves per build — carried from triage log #7.
+- No timeout if the MCP server hangs — low: unlikely with a local SQLite server; fix adds timeouts.
+- Parallel `get_ticket` + `get_customer_history` in one message mis-ordered or accepted with a guessed customer — low: the model can't know the customer ID before the ticket lookup; fix adds a second pass.
+- `get_ticket` called with a whitespace-variant ID rejected — low: unlikely; the rejection is safe.
+- Multiple structured outputs reported as a validation failure — carried from triage log #12.
+- Commit message says tests use fake tools, but two start the local server — low: they're still offline; wording only.
+- `app.db-journal` not in the new deferral note — already deferred from story 1.2.
+- `review_loop_iteration: 0` after a review — false: the counter only counts loopbacks.
+
 **Acceptance Criteria:**
 - Given the repo after this story, when `uv run pytest` runs with no network and no keys, then every test passes, Epic 1's included.
 - Given a valid `GEMINI_API_KEY` and a loaded `app.db`, when `uv run python run_agent.py T-1042` runs, then it prints the four-key decision and a `triage` trace appears in `mlflow.db` under experiment `triage-agent`.

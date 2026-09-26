@@ -1,6 +1,7 @@
 """Offline tests for the triage agent: scripted fake model, fake tools, no keys."""
 
 import asyncio
+import json
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -194,6 +195,31 @@ def test_decision_without_proper_lookups_is_rejected(script_kwargs, error, messa
 def _any_ticket(ticket_id: str) -> dict:
     """Return one support ticket by its ID."""
     return {"ticket_id": ticket_id, "customer_id": "C-77", "created_at": "x", "text": "Charged twice"}
+
+
+@pytest.mark.skipif(
+    not (agent.REPO_ROOT / "app.db").exists(),
+    reason="needs app.db: run `uv run python load_seed.py`",
+)
+def test_valid_ticket_real_server():
+    # The real adapter returns content blocks, not the fakes' plain string.
+    tools = asyncio.run(agent.load_tools())
+    assert run(script(VALID), tools=tools) == VALID
+
+
+def test_triage_success_returns_json_dict(clean_env):
+    async def fake_load_tools():
+        return TOOLS
+
+    clean_env.setattr(agent, "make_model", lambda: script(VALID))
+    clean_env.setattr(agent, "load_tools", fake_load_tools)
+    decision = asyncio.run(agent.triage("T-1042"))
+    assert type(decision) is dict
+    assert json.loads(json.dumps(decision)) == VALID
+
+
+def test_system_prompt_says_no_escalation_tool():
+    assert "no escalate_to_human tool in this version" in system_prompt()
 
 
 def test_unknown_ticket_real_server():

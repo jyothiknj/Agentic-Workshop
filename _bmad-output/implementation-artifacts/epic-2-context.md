@@ -48,7 +48,7 @@ Build the support-ticket triage agent itself. It is a LangChain agent that reads
   - The schema allows exactly four fields: `category`, `priority`, `route` and `rationale`. Extra fields are rejected.
   - `route` must match `category` one to one.
   - `rationale` is only checked for being non-empty.
-  - Every column in `app.db` is TEXT, so `get_customer_history` returns `open_tickets` as a string (for example `"2"`). Convert it to a number before the "3 or more" comparison.
+  - Every column in `app.db` is TEXT, so `get_customer_history` returns `open_tickets` as a string (for example `"2"`). There is no code-side conversion: the model applies the Enterprise rule's "3 or more" comparison from the policy text (story 2.1 decision).
   - `get_customer_history` also returns `name`, `plan` and `ticket_ids`.
 - Python 3.12 or newer, managed with uv. Add packages with `uv add`.
 
