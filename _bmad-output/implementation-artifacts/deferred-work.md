@@ -1,0 +1,6 @@
+## Deferred from: code review of 1-the-triage-decision-schema (2026-09-26)
+
+- Epic 1 `SPEC.md` CAP-1 still allows any category with any route and asks for a one-sentence rationale, while the story (and code) require the matching route and only a non-empty rationale; its Open Questions still list both as unresolved. Epics 2 and 3 treat SPEC.md as canonical. Update through `/bmad-spec`.
+- Commit `984d093 spec: epic1` sits on `story/Jyothi-1.1`, so SPEC.md, stories.yaml and .memlog.md ride along in the story's merge. Merge the spec branch to main first so the story diff holds only story code.
+- `customers.open_tickets` storage type (integer vs CSV text) is still an open question in SPEC.md and feeds the Enterprise rule's "3 or more" comparison; settle it in story 2.
+- `validate_decision` rejects an already-built `TriageDecision` ("not a JSON object: got TriageDecision"); Epic 2 re-validates the agent's structured output, which LangChain returns as a model instance. Reason for deferring: Epic 2 owns how structured output is re-validated.

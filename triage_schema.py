@@ -71,7 +71,8 @@ def validate_decision(data: dict[str, Any] | str) -> TriageDecision:
     if isinstance(data, str):
         try:
             data = json.loads(data)
-        except (json.JSONDecodeError, RecursionError) as exc:
+        # ValueError also covers JSONDecodeError and oversized integers.
+        except (ValueError, RecursionError) as exc:
             raise ValueError(
                 f"triage decision is not a JSON object: invalid JSON ({exc})"
             ) from exc

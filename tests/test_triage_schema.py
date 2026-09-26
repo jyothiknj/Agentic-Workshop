@@ -80,18 +80,24 @@ def test_bad_category(value):
     assert_rejected(with_(category=value), "category")
 
 
-@pytest.mark.parametrize("value", ["P5", "p2", "P0", "2", 2])
+@pytest.mark.parametrize("value", ["P5", "p2", "P0", "2", 2, "P2 "])
 def test_bad_priority(value):
     assert_rejected(with_(priority=value), "priority")
 
 
-@pytest.mark.parametrize("value", ["sales-team", "Billing-Team", "billing"])
+@pytest.mark.parametrize("value", ["sales-team", "Billing-Team", "billing", " billing-team"])
 def test_bad_route(value):
     assert_rejected(with_(route=value), "route")
 
 
 def test_mismatched_route():
     assert_rejected(with_(route="bug-team"), "route", "billing-team")
+
+
+def test_bad_category_skips_route_pairing():
+    with pytest.raises(ValidationError) as exc_info:
+        validate_decision(with_(category="sales"))
+    assert [error["loc"] for error in exc_info.value.errors()] == [("category",)]
 
 
 def test_multi_sentence_rationale_accepted():
@@ -122,7 +128,7 @@ def test_extra_field():
 
 @pytest.mark.parametrize(
     "data",
-    ["{not json", "[1, 2]", "null", "42", [VALID], None, "[" * 100000],
+    ["{not json", "[1, 2]", "null", "42", [VALID], None, "[" * 100000, "9" * 5000],
     ids=[
         "malformed-json",
         "json-list",
@@ -131,6 +137,7 @@ def test_extra_field():
         "list",
         "none",
         "deeply-nested",
+        "oversized-int",
     ],
 )
 def test_not_an_object(data):

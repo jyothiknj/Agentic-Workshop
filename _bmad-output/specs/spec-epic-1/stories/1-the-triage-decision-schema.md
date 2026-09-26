@@ -61,6 +61,30 @@ context: ['{project-root}/_bmad-output/specs/spec-epic-1/SPEC.md']
 - [x] `pyproject.toml` -- add `pythonpath = ["."]` under `[tool.pytest.ini_options]` -- so tests can import root-level modules.
 - [x] `tests/test_triage_schema.py` -- one test per I/O matrix row, including a parametrised test over every allowed value of each field -- this proves both acceptance and rejection.
 
+### Review Findings
+
+Code review of `main...story/Jyothi-1.1` (2026-09-26).
+
+- [x] [Review][Defer] `validate_decision` rejects a `TriageDecision` instance [triage_schema.py:78] — deferred: Epic 2 owns how structured output is re-validated.
+- [x] [Review][Patch] Oversized JSON integer escapes the "not a JSON object" error [triage_schema.py:74]
+- [x] [Review][Patch] No test for an invalid category together with a route [tests/test_triage_schema.py:93]
+- [x] [Review][Patch] Padded-whitespace values only tested for `category` [tests/test_triage_schema.py:84]
+- [x] [Review][Defer] Epic 1 SPEC.md contradicts the story on route pairing and rationale strictness [_bmad-output/specs/spec-epic-1/SPEC.md] — deferred: fix is a spec change, which AGENTS.md routes through `/bmad-spec`.
+- [x] [Review][Defer] Epic spec commit `984d093` is bundled into the story branch — deferred: git history question, not a code defect; resolve by merging the spec branch to main first.
+- [x] [Review][Defer] `customers.open_tickets` type (integer vs text) is still an open question — deferred: belongs to story 2.
+
+Rejected:
+- `bytes`/non-dict mapping input rejected — low: no caller passes these; the fix adds branches (same as triage log #8).
+- Route check done on the field, not the model — false: the matrix needs the error on `route` (triage log #3).
+- Non-string dict key names no field — low: impossible from JSON input; fix adds a guard.
+- Story marked done before this review — low: process only; nothing has been merged.
+- `ROUTE_FOR_CATEGORY` typed as `dict[str, str]` / bare `KeyError` — false: `test_route_for_category_matches_policy` fails on any drift.
+- Route check silently depends on field order — false: reordering skips the check and `test_mismatched_route` then fails.
+- Two exception types for callers — false: `ValidationError` subclasses `ValueError`, and the docstring documents catching `ValueError`.
+- Rationale stored untrimmed — low: the spec checks, not normalises; changing stored text is a behaviour change.
+- `review_loop_iteration: 0` after a review — false: patches don't count as loopbacks; only intent_gap/bad_spec increment it.
+- No `Field(description=...)` for the model — maybe-false, low: Epic 2 gives the agent TRIAGE_POLICY.md as instructions (triage log #6).
+
 **Acceptance Criteria:**
 - Given a valid decision, when it is dumped with `model_dump()`, then the result is a plain dict with exactly the four keys that `json.dumps` can serialise.
 - Given the repo after this story, when `uv run pytest` runs, then every test passes with no network access and no API keys set.
