@@ -17,7 +17,8 @@ Lay the foundation that the triage agent (Epic 2) and its eval (Epic 3) build ag
   - `category`: one of `billing | bug | access | performance | how-to`
   - `priority`: one of `P1 | P2 | P3 | P4`
   - `route`: one of `billing-team | bug-team | access-team | performance-team | how-to-team`
-  - `rationale`: a non-empty, one-sentence string
+  - `rationale`: a non-empty string (after trimming whitespace); it is not checked to be one sentence
+- `route` must be the one the policy pairs with `category` (billing → billing-team, bug → bug-team, access → access-team, performance → performance-team, how-to → how-to-team); a mismatched pair is rejected, naming `route`.
 - A bad value for any field, a missing field, an empty rationale, or any extra field is rejected with an error that **names the offending field**.
 - **Loader:** `uv run python load_seed.py` loads `seed/tickets.csv` and `seed/customers.csv` into `app.db` at the repo root, as tables `tickets` and `customers`. Their columns and row counts must match the CSVs.
 - **Idempotent:** a second run leaves both tables exactly as they were after the first run, with no duplicate rows.
@@ -35,10 +36,10 @@ Lay the foundation that the triage agent (Epic 2) and its eval (Epic 3) build ag
   - `customers(customer_id, name, plan, open_tickets)`
   - The server resolves `app.db` relative to the repo root.
 - The schema is a shared contract. Epic 2 returns it as the agent's structured output, and Epic 3's `valid_schema` scorer validates against it. It must be importable, and its field names and allowed values must not drift.
-- Open questions the spec leaves unresolved (do not invent answers; raise them if a story depends on one):
-  - Must `route` match `category` 1:1 (the policy's billing to billing-team mapping and so on), or is any valid pairing accepted?
-  - Is "one sentence" enforced beyond non-empty?
-  - Should `customers.open_tickets` be stored as an integer (a later Enterprise rule compares it to 3) or as CSV text?
+- Decisions made by the stories (the Epic 1 `SPEC.md` still lists these as open questions):
+  - `route` must match `category` 1:1 (story 1.1).
+  - The rationale is only checked for being non-empty (story 1.1).
+  - Every column in `app.db` is TEXT, including `customers.open_tickets`, so `get_customer_history` returns `"open_tickets": "2"`; Epic 2 converts it before the Enterprise rule's "3 or more" comparison (story 1.2).
 
 ## Cross-Story Dependencies
 

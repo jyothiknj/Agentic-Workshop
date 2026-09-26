@@ -55,6 +55,28 @@ context: ['{project-root}/_bmad-output/specs/spec-epic-1/SPEC.md']
 - [x] `load_seed.py` -- add `load_seed(db_path=<repo>/app.db, seed_dir=<repo>/seed) -> dict[str, int]` returning the row count per table, and a `__main__` that runs it and prints the counts. Read CSVs with `csv.DictReader` (UTF-8), check each header, then drop, recreate and fill both tables in one transaction -- so reruns are idempotent and a bad run changes nothing.
 - [x] `tests/test_load_seed.py` -- one test per I/O matrix row, each against a temp database (and a temp seed dir for the missing/wrong-header rows); the MCP read-back test calls `get_ticket` and `get_customer_history` from the path-loaded server -- proves CAP-2 and CAP-3 without touching the real `app.db`.
 
+### Review Findings
+
+Code review of `main...story/Jyothi-1.2` (2026-09-26).
+
+- [x] [Review][Patch] Reject a seed CSV with a header but no data rows (decided: fail the load, leave `app.db` unchanged) [load_seed.py:27]
+- [x] [Review][Patch] No test that a CSV with a byte-order mark still loads [load_seed.py:27]
+- [x] [Review][Patch] Test helper `csv_rows` decodes differently from the loader (`utf-8` vs `utf-8-sig`, blank lines) [tests/test_load_seed.py:27]
+- [x] [Review][Patch] No test that `seed/` is unchanged after a load [tests/test_load_seed.py:44]
+- [x] [Review][Patch] `epic-1-context.md` still lists route pairing, rationale strictness and `open_tickets` as open, and says "one-sentence" rationale [_bmad-output/implementation-artifacts/epic-1-context.md:38]
+- [x] [Review][Defer] `app.db-journal` is not git-ignored [.gitignore] — deferred: only left behind if a load is killed mid-write; the one-line `.gitignore` change is outside this story (AGENTS.md: say so instead of doing it).
+
+Rejected:
+- Rows with an empty ID load silently — low: the seed has none and is read-only; fix adds a guard.
+- Unreadable / non-UTF-8 / malformed CSV ends in a traceback — carried from triage log #10.
+- `unlink` of a new `app.db` can raise and hide the original error — low: needs another process to lock a file created milliseconds earlier; fix adds a guard.
+- Short/long-row test's expected line number breaks with extra trailing newlines — low: seed files are read-only and end with one newline; tests pass.
+- Story marked `done` / `review_loop_iteration: 0` / Implementation Notes omit the patches — false: the build workflow sets `done`, the counter only counts loopbacks, and the patches are in the triage log; nothing is merged.
+- MCP read-back test checks only some fields — false: it asserts everything the matrix row requires.
+- Command-line exit code not tested as a script — carried from triage log #12.
+- `utf-8-sig` differs from "UTF-8" in the task — false: a superset that only drops a leading byte-order mark.
+- Deleting a new `app.db` after a failed first run goes beyond the spec — false: it only applies with no previous database and keeps the constraint.
+
 **Acceptance Criteria:**
 - Given the repo after this story, when `uv run pytest` runs, then every test (story 1's included) passes with no network and no API keys set.
 - Given `uv run python load_seed.py` has run twice, when `app.db` is queried, then `tickets` has 24 rows and `customers` has 20, and `git status` shows no change under `seed/` and no tracked `app.db`.

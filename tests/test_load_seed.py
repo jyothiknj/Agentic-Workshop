@@ -25,8 +25,9 @@ def dump(db_path: Path) -> dict[str, list[tuple]]:
 
 
 def csv_rows(name: str) -> list[tuple]:
-    with (SEED_DIR / name).open(encoding="utf-8", newline="") as f:
-        return sorted(tuple(r) for r in list(csv.reader(f))[1:])
+    # Decode like the loader: drop a byte-order mark and skip blank lines.
+    with (SEED_DIR / name).open(encoding="utf-8-sig", newline="") as f:
+        return sorted(tuple(r) for r in list(csv.reader(f))[1:] if r)
 
 
 @pytest.fixture
@@ -43,8 +44,10 @@ def seed_copy(tmp_path: Path) -> Path:
 
 def test_first_load_creates_db_with_counts(db, monkeypatch, capsys):
     monkeypatch.setattr(loader, "DEFAULT_DB_PATH", db)
+    seed_before = {p.name: p.read_bytes() for p in SEED_DIR.iterdir()}
     assert not db.exists()
     assert loader.main() == 0
+    assert {p.name: p.read_bytes() for p in SEED_DIR.iterdir()} == seed_before
     assert db.exists()
     out = capsys.readouterr().out
     assert "24 tickets" in out and "20 customers" in out
@@ -53,6 +56,33 @@ def test_first_load_creates_db_with_counts(db, monkeypatch, capsys):
     assert len(contents["customers"]) == 20
     assert contents["tickets"] == csv_rows("tickets.csv")
     assert contents["customers"] == csv_rows("customers.csv")
+
+
+@pytest.mark.parametrize("name", ["tickets.csv", "customers.csv"])
+def test_byte_order_mark_still_loads(db, seed_copy, name):
+    path = seed_copy / name
+    path.write_text("\ufeff" + path.read_text(encoding="utf-8"), encoding="utf-8")
+    assert load_seed(db, seed_copy) == {"tickets": 24, "customers": 20}
+    assert dump(db) == {"tickets": csv_rows("tickets.csv"), "customers": csv_rows("customers.csv")}
+
+
+@pytest.mark.parametrize("name", ["tickets.csv", "customers.csv"])
+def test_header_only_csv_changes_nothing(db, seed_copy, name, monkeypatch, capsys):
+    load_seed(db)
+    before = dump(db)
+    path = seed_copy / name
+    path.write_text(path.read_text(encoding="utf-8").splitlines()[0] + "\n", encoding="utf-8")
+
+    with pytest.raises(SeedError, match="no data rows") as exc:
+        load_seed(db, seed_copy)
+    assert name in str(exc.value)
+    assert dump(db) == before
+
+    monkeypatch.setattr(loader, "DEFAULT_DB_PATH", db)
+    monkeypatch.setattr(loader, "DEFAULT_SEED_DIR", seed_copy)
+    assert loader.main() != 0
+    assert name in capsys.readouterr().err
+    assert dump(db) == before
 
 
 def test_second_load_is_identical(db):

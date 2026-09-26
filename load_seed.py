@@ -37,6 +37,8 @@ def _read_csv(path: Path, columns: list[str]) -> list[tuple[str, ...]]:
                     f"{path} line {reader.line_num} does not have exactly {len(columns)} fields"
                 )
             rows.append(tuple(row[c] for c in columns))
+        if not rows:
+            raise SeedError(f"{path} has no data rows")
         return rows
 
 
