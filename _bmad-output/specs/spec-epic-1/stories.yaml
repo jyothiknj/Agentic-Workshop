@@ -1,0 +1,12 @@
+- id: "1"
+  title: The triage-decision schema
+  description: >-
+    Build the triage-decision schema (CAP-1): category, priority, route and a
+    one-sentence rationale, rejecting anything else with an error that names
+    the offending field. Epics 2 and 3 import it, so it ships first.
+- id: "2"
+  title: The seed loader
+  description: >-
+    Build load_seed.py to load seed/tickets.csv and seed/customers.csv into
+    app.db with the table and column names mcp/triage_server.py reads (CAP-2),
+    so that a second run leaves the same database (CAP-3).
