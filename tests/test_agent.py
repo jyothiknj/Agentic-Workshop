@@ -225,7 +225,7 @@ def test_system_prompt_has_escalation_rule():
         "When the final priority is P1 and the customer is on the Enterprise plan, "
         "call `escalate_to_human`" in prompt
     )
-    assert "do not retry" in prompt
+    assert "if it is rejected, do not retry it" in prompt
     assert prompt.index("get_ticket") < prompt.index("get_customer_history")
 
 
@@ -507,6 +507,53 @@ class _NoSpan:
 
     def set_outputs(self, outputs):
         pass
+
+
+@pytest.mark.parametrize("sent_id", ["t-1042", " T-1042 "])
+def test_escalation_ticket_id_ignores_case_and_spaces(escalations, sent_id):
+    approve = approver(True)
+    asked = approve.asked
+    model = escalation_script()
+    model.responses[2].tool_calls[0]["args"]["ticket_id"] = sent_id
+    assert asyncio.run(agent._run(build_agent(model, TOOLS), "T-1042", approve)) == P1
+    assert len(asked) == 1
+    assert len(escalations) == 1
+
+
+def test_endless_escalation_stops_with_a_clear_error(escalations):
+    approve = approver(False)
+    asked = approve.asked
+    lookups = script(P1).responses[:2]
+    repeats = [
+        AIMessage(content="", tool_calls=[call("escalate_to_human", ESCALATION, 10 + i)])
+        for i in range(agent.MAX_RESUMES + 2)
+    ]
+    model = RecordingModel(responses=lookups + repeats, seen=[])
+    with pytest.raises(StructuredOutputFailedError, match="kept requesting escalation"):
+        asyncio.run(agent._run(build_agent(model, TOOLS), "T-1042", approve))
+    assert len(asked) == 1
+    assert escalations == []
+
+
+def test_run_agent_approval_drives_the_real_path(monkeypatch, tmp_path, capsys, escalations):
+    import run_agent
+
+    async def fake_load_tools():
+        return TOOLS
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_agent.mlflow, "set_tracking_uri", lambda uri: None)
+    monkeypatch.setattr(run_agent.mlflow, "set_experiment", lambda name: None)
+    monkeypatch.setattr(run_agent.mlflow.langchain, "autolog", lambda *a, **k: None)
+    monkeypatch.setattr(run_agent.mlflow, "start_span", _NoSpan)
+    monkeypatch.setattr(run_agent, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.setattr(agent, "make_model", escalation_script)
+    monkeypatch.setattr(agent, "load_tools", fake_load_tools)
+    monkeypatch.setattr(agent, "ask_at_terminal", lambda request: True)
+    monkeypatch.setattr("sys.argv", ["run_agent.py", "T-1042"])
+    run_agent.main()
+    assert escalations == [ESCALATION]  # the wrapper's answer reached _decide
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "Escalated to a person: yes"
 
 
 @pytest.mark.parametrize(

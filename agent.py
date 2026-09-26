@@ -163,6 +163,10 @@ def escalate_to_human(ticket_id: str, reason: str) -> str:
 
 ESCALATION_TOOL = escalate_to_human.name
 
+# Resumes allowed per run. The approver is asked once, so more than a few
+# means the model keeps escalating instead of returning its decision.
+MAX_RESUMES = 3
+
 Approver = Callable[[dict], bool]
 """Takes the escalation request ``{"ticket_id": ..., "reason": ...}``; ``True`` escalates."""
 
@@ -254,7 +258,15 @@ async def _run(agent: Any, ticket_id: str, approve: Approver | None = None) -> d
     # sent in the same model turn as the decision must still be asked about.
     # HumanInTheLoopMiddleware raises one interrupt per model turn.
     asked: list[bool] = []  # the approver is asked at most once per run
+    resumes = 0
     while interrupts := result.get("__interrupt__"):
+        # Each resume gets a fresh recursion limit, so cap them ourselves.
+        resumes += 1
+        if resumes > MAX_RESUMES:
+            raise StructuredOutputFailedError(
+                f"The agent kept requesting escalation for {ticket_id} and never "
+                "returned a TriageDecision"
+            )
         decisions = _decide(interrupts[0].value, approve, ticket_id, asked)
         result = await agent.ainvoke(Command(resume={"decisions": decisions}), config)
     decision = result.get("structured_response")
@@ -264,6 +276,11 @@ async def _run(agent: Any, ticket_id: str, approve: Approver | None = None) -> d
         )
     _check_lookups(result.get("messages", []), ticket_id)
     return decision.model_dump()
+
+
+def _same_ticket(requested: Any, ticket_id: str) -> bool:
+    """Compare ticket IDs ignoring surrounding spaces and letter case."""
+    return str(requested or "").strip().upper() == ticket_id.strip().upper()
 
 
 def _reject(message: str) -> dict:
@@ -282,7 +299,7 @@ def _decide(
     decisions = []
     for action in hitl_request.get("action_requests", []):
         args = dict(action.get("args") or {})
-        if args.get("ticket_id") != ticket_id:
+        if not _same_ticket(args.get("ticket_id"), ticket_id):
             decisions.append(_reject(
                 f"This escalation was for the wrong ticket; only {ticket_id} is being triaged."
             ))

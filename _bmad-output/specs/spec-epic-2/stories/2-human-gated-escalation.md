@@ -57,6 +57,31 @@ context: ['{project-root}/_bmad-output/specs/spec-epic-2/SPEC.md', '{project-roo
 - [x] `run_agent.py` -- pass a terminal approver that records the answer, and print the `Escalated to a person: ...` line after the decision only when it was asked -- outside the MLflow lines.
 - [x] `tests/test_agent.py` -- one test per offline matrix row with the scripted model; the terminal-answer test monkeypatches `input` -- live row is covered by Verification.
 
+### Review Findings
+
+Code review of `main...story/Jyothi-2.2` (2026-09-26).
+
+- [x] [Review][Patch] Wrong-ticket check compares IDs exactly, so `t-1044` or `T-1044 ` silently rejects a real escalation and no one is asked [agent.py:_decide]
+- [x] [Review][Patch] Resume loop has no cap; each resume gets a fresh recursion limit, so a model that keeps escalating never stops [agent.py:_run]
+- [x] [Review][Patch] `run_agent.py`'s approver wrapper is only tested for its printed line, not that its return value drives the real approval path [tests/test_agent.py:test_run_agent_output]
+- [x] [Review][Patch] Escalation-prompt test matches "do not retry" anywhere (the P1 + Enterprise condition was already asserted; that half of the finding was false) [tests/test_agent.py:test_system_prompt_has_escalation_rule]
+- [x] [Review][Defer] Live escalation row never run: whether Gemini calls `escalate_to_human` for T-1044 is untested [run_agent.py] — deferred: needs the user's key and an interactive terminal (`! uv run python run_agent.py T-1044`).
+
+Rejected:
+- Escalations rejected in code aren't shown in CLI output — low: with the ID normalised these are misbehaviour cases, recorded in the trace; fix adds output paths.
+- Terminal prompt goes to stdout next to the JSON — false as a new defect: an escalated run's stdout already has the non-JSON `Escalated to a person` line by the user's decision.
+- Escalation with a missing or empty reason can be approved, then fails validation while "yes" prints; triage-log #11 claim — low: the tool schema requires `reason`; fix adds a guard; the log claim would need editing this spec.
+- Escalation before lookups or for a non-P1 decision — carried from triage log #7 and #12.
+- An approver that raises aborts the run — low: a loud failure; no decision is returned.
+- Only `interrupts[0]` is answered — false: the middleware raises one interrupt per model turn (triage log #4).
+- Approval prompt lacks priority and plan facts — the request shape (ticket ID, reason) is set by this spec.
+- Human wait time counted in the MLflow span — low: only interactive runs wait; Epic 3 auto-approves.
+- Middleware `description` unused; action name unchecked — carried from triage log #8.
+- A second request is rejected after an approval too — false as a defect: the escalation still runs once.
+- "Yes" line reports the answer, not the tool run — carried from triage log #11.
+- `langgraph` imported without being declared — false: it ships with `langchain`, and the Code Map names these imports.
+- `review_loop_iteration: 0` after a review — false: the counter only counts loopbacks.
+
 **Acceptance Criteria:**
 - Given the repo after this story, when `uv run pytest` runs with no network and no keys, then every test passes, including story 2.1's.
 - Given any run, when the approver never answers yes, then `escalate_to_human` never executes.

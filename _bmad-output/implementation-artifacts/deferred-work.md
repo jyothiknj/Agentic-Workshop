@@ -16,3 +16,7 @@
 ## Deferred from: code review of 1-the-triage-agent (2026-09-26)
 
 - Story 2.1's live verification is incomplete. `PROVIDER=groq run_agent.py T-1042` has never passed: Groq rejected the configured `GROQ_API_KEY` (401). The live Gemini runs of T-1042 and T-1099 predate the review fixes (the `_check_lookups` guard). Nobody has inspected whether the autologged MCP tool spans sit under the `triage` span in `mlflow.db` with `get_ticket` before `get_customer_history` (CAP-3's success signal). Needs a valid Groq key and the user's go-ahead for live model calls.
+
+## Deferred from: code review of 2-human-gated-escalation (2026-09-26)
+
+- Story 2.2's live escalation row has never run: nobody has checked that Gemini calls `escalate_to_human` for T-1044 (and T-1048, T-1057), pauses for a yes/no, and prints `Escalated to a person: ...`. It needs the user's key and an interactive terminal, e.g. `! uv run python run_agent.py T-1044`; a non-interactive shell answers "no" through end of input.
