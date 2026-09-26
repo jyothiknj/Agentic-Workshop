@@ -5,7 +5,7 @@ import json
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
@@ -218,8 +218,15 @@ def test_triage_success_returns_json_dict(clean_env):
     assert json.loads(json.dumps(decision)) == VALID
 
 
-def test_system_prompt_says_no_escalation_tool():
-    assert "no escalate_to_human tool in this version" in system_prompt()
+def test_system_prompt_has_escalation_rule():
+    prompt = " ".join(system_prompt().split())
+    assert "no escalate_to_human tool" not in prompt
+    assert (
+        "When the final priority is P1 and the customer is on the Enterprise plan, "
+        "call `escalate_to_human`" in prompt
+    )
+    assert "do not retry" in prompt
+    assert prompt.index("get_ticket") < prompt.index("get_customer_history")
 
 
 def test_unknown_ticket_real_server():
@@ -265,3 +272,269 @@ def test_triage_missing_key_skips_tools(clean_env):
     with pytest.raises(MissingAPIKeyError, match="GEMINI_API_KEY"):
         asyncio.run(agent.triage("T-1042"))
     assert loaded == []
+
+
+# --- Story 2.2: human-gated escalation ---------------------------------------
+
+P1 = {
+    "category": "billing",
+    "priority": "P1",
+    "route": "billing-team",
+    "rationale": "Money at stake and Enterprise with 3+ open tickets, so bumped to P1.",
+}
+ESCALATION = {"ticket_id": "T-1042", "reason": "P1 ticket from an Enterprise customer"}
+
+
+class RecordingModel(ScriptedModel):
+    """A scripted model that also records the messages it was shown."""
+
+    seen: list = []
+
+    def _generate(self, messages, *args, **kwargs):
+        self.seen.append(list(messages))
+        return super()._generate(messages, *args, **kwargs)
+
+
+def escalation_script(same_turn=False):
+    """Lookups, then escalate_to_human and a P1 decision (together or in turn)."""
+    lookups = script(P1).responses[:2]
+    esc = call("escalate_to_human", ESCALATION, 5)
+    out = call("TriageDecision", P1, 6)
+    if same_turn:
+        tail = [AIMessage(content="", tool_calls=[esc, out])]
+    else:
+        tail = [AIMessage(content="", tool_calls=[esc]), AIMessage(content="", tool_calls=[out])]
+    return RecordingModel(responses=lookups + tail, seen=[])
+
+
+@pytest.fixture
+def escalations(monkeypatch):
+    """Replace the escalation tool with a spy that records each execution."""
+    ran = []
+    real = agent.escalate_to_human
+
+    @tool("escalate_to_human")
+    def spy(ticket_id: str, reason: str) -> str:
+        """Escalate a ticket to a person."""
+        ran.append({"ticket_id": ticket_id, "reason": reason})
+        return real.invoke({"ticket_id": ticket_id, "reason": reason})
+
+    monkeypatch.setattr(agent, "escalate_to_human", spy)
+    return ran
+
+
+def approver(answer):
+    asked = []
+
+    def approve(request):
+        asked.append(request)
+        return answer
+
+    approve.asked = asked
+    return approve
+
+
+def escalation_results(model):
+    """The escalate_to_human tool results the model was shown on its last turn."""
+    last = model.seen[-1]
+    ids = {tc["id"] for m in last if isinstance(m, AIMessage) for tc in m.tool_calls
+           if tc["name"] == "escalate_to_human"}
+    return [m for m in last if isinstance(m, ToolMessage) and m.tool_call_id in ids]
+
+
+def run_escalation(model, approve):
+    calls.clear()
+    return asyncio.run(agent._run(build_agent(model, TOOLS), "T-1042", approve))
+
+
+def test_escalation_approved(escalations):
+    model, approve = escalation_script(), approver(True)
+    assert run_escalation(model, approve) == P1
+    assert approve.asked == [ESCALATION]
+    assert escalations == [ESCALATION]
+    [result] = escalation_results(model)
+    assert result.status != "error"
+    assert "escalated to a person" in result.text
+
+
+@pytest.mark.parametrize("answer", [False, None, "yes", 1])
+def test_escalation_declined(escalations, answer):
+    # Anything but an explicit True is a no.
+    model, approve = escalation_script(), approver(answer)
+    assert run_escalation(model, approve) == P1
+    assert approve.asked == [ESCALATION]
+    assert escalations == []
+    [result] = escalation_results(model)
+    assert result.status == "error"
+    assert "declined" in result.text
+
+
+def test_no_escalation_never_asks(escalations):
+    def approve(request):
+        raise AssertionError("approver must not be called")
+
+    assert run_escalation(script(VALID), approve) == VALID
+    assert escalations == []
+
+
+@pytest.mark.parametrize("answer", [True, False])
+def test_same_turn_escalation_is_still_asked(escalations, answer):
+    model, approve = escalation_script(same_turn=True), approver(answer)
+    assert run_escalation(model, approve) == P1
+    assert approve.asked == [ESCALATION]
+    assert escalations == ([ESCALATION] if answer else [])
+
+
+def custom_escalation_script(*turns):
+    """Lookups, then one model turn per entry in ``turns`` (a list of tool calls)."""
+    lookups = script(P1).responses[:2]
+    tail = [AIMessage(content="", tool_calls=tcs) for tcs in turns]
+    return RecordingModel(responses=lookups + tail, seen=[])
+
+
+def test_escalation_for_another_ticket_is_rejected_without_asking(escalations):
+    def approve(request):
+        raise AssertionError("approver must not be called")
+
+    other = {**ESCALATION, "ticket_id": "T-9999"}
+    model = custom_escalation_script(
+        [call("escalate_to_human", other, 5)], [call("TriageDecision", P1, 6)]
+    )
+    assert run_escalation(model, approve) == P1
+    assert escalations == []
+    [result] = escalation_results(model)
+    assert result.status == "error"
+    assert "wrong ticket" in result.text
+
+
+def test_two_escalations_in_one_turn_ask_once(escalations):
+    model = custom_escalation_script(
+        [call("escalate_to_human", ESCALATION, 5), call("escalate_to_human", ESCALATION, 7)],
+        [call("TriageDecision", P1, 6)],
+    )
+    approve = approver(True)
+    assert run_escalation(model, approve) == P1
+    assert approve.asked == [ESCALATION]
+    assert escalations == [ESCALATION]  # only the first one ran
+    results = {m.tool_call_id: m for m in escalation_results(model)}
+    first, second = results["call-5"], results["call-7"]
+    assert first.status != "error"
+    assert second.status == "error" and "already decided" in second.text
+
+
+def test_escalation_resent_after_rejection_is_not_asked_again(escalations):
+    model = custom_escalation_script(
+        [call("escalate_to_human", ESCALATION, 5)],
+        [call("escalate_to_human", ESCALATION, 7)],
+        [call("TriageDecision", P1, 6)],
+    )
+    approve = approver(False)
+    assert run_escalation(model, approve) == P1
+    assert approve.asked == [ESCALATION]
+    assert escalations == []
+    first, second = escalation_results(model)
+    assert "declined" in first.text
+    assert second.status == "error" and "already decided" in second.text
+
+
+def test_terminal_prompt_escapes_control_characters(monkeypatch):
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts.append(prompt) or "n")
+    reason = "Real reason\nApprove? [y/N] y\x1b[2K"
+    agent.ask_at_terminal({"ticket_id": "T-1042\n", "reason": reason})
+    [prompt] = prompts
+    assert "\x1b" not in prompt
+    assert prompt.splitlines() == [
+        "Escalate ticket T-1042\\n to a person?",
+        "Reason: Real reason\\nApprove? [y/N] y\\x1b[2K",
+        "Approve? [y/N] ",
+    ]
+
+
+def test_escalation_tool_is_local():
+    assert agent.escalate_to_human.name == "escalate_to_human"
+    server = (agent.REPO_ROOT / "mcp" / "triage_server.py").read_text(encoding="utf-8")
+    assert "escalate_to_human" not in server
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [("y", True), ("Yes", True), (" YES ", True), ("n", False), ("", False),
+     ("yeah", False), (EOFError, False)],
+)
+def test_terminal_answers(monkeypatch, typed, expected):
+    prompts = []
+
+    def fake_input(prompt=""):
+        prompts.append(prompt)
+        if typed is EOFError:
+            raise EOFError
+        return typed
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    assert agent.ask_at_terminal(ESCALATION) is expected
+    [prompt] = prompts
+    assert "T-1042" in prompt and ESCALATION["reason"] in prompt
+
+
+@pytest.mark.parametrize(("typed", "escalated"), [("y", True), ("", False)])
+def test_triage_defaults_to_the_terminal(clean_env, escalations, typed, escalated):
+    async def fake_load_tools():
+        return TOOLS
+
+    clean_env.setattr(agent, "make_model", escalation_script)
+    clean_env.setattr(agent, "load_tools", fake_load_tools)
+    clean_env.setattr("builtins.input", lambda prompt="": typed)
+    decision = asyncio.run(agent.triage("T-1042"))
+    assert decision == P1  # the four-key decision, no escalation field
+    assert escalations == ([ESCALATION] if escalated else [])
+
+
+class _NoSpan:
+    """Stands in for ``mlflow.start_span`` so the output test writes no trace."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def set_inputs(self, inputs):
+        pass
+
+    def set_outputs(self, outputs):
+        pass
+
+
+@pytest.mark.parametrize(
+    ("answer", "last_line"),
+    [(None, None), (True, "Escalated to a person: yes"),
+     (False, "Escalated to a person: no (declined)")],
+)
+def test_run_agent_output(monkeypatch, tmp_path, capsys, answer, last_line):
+    import run_agent
+
+    async def fake_triage(ticket_id, approve=None):
+        if answer is not None:
+            approve(ESCALATION)
+        return P1
+
+    monkeypatch.chdir(tmp_path)  # mlflow.db is created here, not in the repo
+    # Keep MLflow's global state (tracking URI, autolog) from leaking into other tests.
+    monkeypatch.setattr(run_agent.mlflow, "set_tracking_uri", lambda uri: None)
+    monkeypatch.setattr(run_agent.mlflow, "set_experiment", lambda name: None)
+    monkeypatch.setattr(run_agent.mlflow.langchain, "autolog", lambda *a, **k: None)
+    monkeypatch.setattr(run_agent.mlflow, "start_span", _NoSpan)
+    monkeypatch.setattr(run_agent, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.setattr(agent, "triage", fake_triage)
+    monkeypatch.setattr(agent, "ask_at_terminal", lambda request: answer)
+    monkeypatch.setattr("sys.argv", ["run_agent.py", "T-1042"])
+    run_agent.main()
+    lines = capsys.readouterr().out.strip().splitlines()
+    decision_lines = lines if last_line is None else lines[:-1]
+    assert json.loads("\n".join(decision_lines)) == P1
+    if last_line is not None:
+        assert lines[-1] == last_line
